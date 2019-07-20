@@ -16,12 +16,10 @@
 package com.google.firebase.udacity.friendlychat;
 
 import android.content.Intent;
+import android.net.Uri;
 import android.os.Bundle;
-import android.support.annotation.NonNull;
-import android.support.annotation.Nullable;
-import android.support.v7.app.AppCompatActivity;
+
 import android.text.Editable;
-import android.text.InputFilter;
 import android.text.TextWatcher;
 import android.util.Log;
 import android.view.Menu;
@@ -35,7 +33,16 @@ import android.widget.ListView;
 import android.widget.ProgressBar;
 import android.widget.Toast;
 
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+import androidx.appcompat.app.AppCompatActivity;
+
 import com.firebase.ui.auth.AuthUI;
+import com.google.android.gms.tasks.OnCompleteListener;
+import com.google.android.gms.tasks.OnFailureListener;
+import com.google.android.gms.tasks.OnSuccessListener;
+import com.google.android.gms.tasks.Task;
+import com.google.firebase.Timestamp;
 import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.auth.FirebaseUser;
 import com.google.firebase.database.ChildEventListener;
@@ -43,11 +50,23 @@ import com.google.firebase.database.DataSnapshot;
 import com.google.firebase.database.DatabaseError;
 import com.google.firebase.database.DatabaseReference;
 import com.google.firebase.database.FirebaseDatabase;
+import com.google.firebase.firestore.DocumentReference;
+import com.google.firebase.firestore.DocumentSnapshot;
+import com.google.firebase.firestore.FirebaseFirestore;
+import com.google.firebase.firestore.QueryDocumentSnapshot;
+import com.google.firebase.firestore.QuerySnapshot;
+import com.google.firebase.firestore.SetOptions;
+import com.google.firebase.storage.FirebaseStorage;
+import com.google.firebase.storage.StorageReference;
+import com.google.firebase.storage.UploadTask;
 import com.google.gson.Gson;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Date;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 public class MainActivity extends AppCompatActivity {
 
@@ -62,13 +81,17 @@ public class MainActivity extends AppCompatActivity {
     private ImageButton mPhotoPickerButton;
     private EditText mMessageEditText;
     private Button mSendButton;
+    private FirebaseUser user;
     private FirebaseDatabase mFirebaseDatabase;
+    private FirebaseStorage mFirebaseStorage;
+    private FirebaseFirestore mFirebaseFirestore;
     private DatabaseReference mMessagesDatabaseReference;
     private ChildEventListener mChildEventListener;
     private FirebaseAuth mfirebaseAuth;
     private FirebaseAuth.AuthStateListener mAuthStateListener;
-
+    private static final int RC_PHOTO_PICKER =  2;
     private String mUsername;
+    private StorageReference mChatPhotosStorageReference;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -78,9 +101,12 @@ public class MainActivity extends AppCompatActivity {
         mUsername = ANONYMOUS;
         mFirebaseDatabase = FirebaseDatabase.getInstance();
         mfirebaseAuth = FirebaseAuth.getInstance();
+        mFirebaseStorage = FirebaseStorage.getInstance();
+        mFirebaseFirestore = FirebaseFirestore.getInstance();
         String str;
         String pathString;
         mMessagesDatabaseReference = FirebaseDatabase.getInstance().getReference().child("messages");
+        mChatPhotosStorageReference = FirebaseStorage.getInstance().getReference().child("chat_photos");
         // Initialize references to views
         mProgressBar = (ProgressBar) findViewById(R.id.progressBar);
         mMessageListView = (ListView) findViewById(R.id.messageListView);
@@ -100,16 +126,19 @@ public class MainActivity extends AppCompatActivity {
         mPhotoPickerButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
-                // TODO: Fire an intent to show an image picker
+                Intent intent = new Intent(Intent.ACTION_GET_CONTENT);
+                intent.setType("image/jpeg");
+                intent.putExtra(Intent.EXTRA_LOCAL_ONLY, true);
+                startActivityForResult(Intent.createChooser(intent, "Complete action using"), RC_PHOTO_PICKER);
+
+
             }
         });
 
         // Enable Send button when there's text to send
         mMessageEditText.addTextChangedListener(new TextWatcher() {
             @Override
-            public void beforeTextChanged(CharSequence charSequence, int i, int i1, int i2) {
-            }
-
+            public void beforeTextChanged(CharSequence charSequence, int i, int i1, int i2) { }
             @Override
             public void onTextChanged(CharSequence charSequence, int i, int i1, int i2) {
                 if (charSequence.toString().trim().length() > 0) {
@@ -119,16 +148,18 @@ public class MainActivity extends AppCompatActivity {
                 }
             }
 
-            @Override
-            public void afterTextChanged(Editable editable) {
+            @Override public void afterTextChanged(Editable editable) {
             }
         });
-        mMessageEditText.setFilters(new InputFilter[]{new InputFilter.LengthFilter(DEFAULT_MSG_LENGTH_LIMIT)});
+
 
         // Send button sends a message and clears the EditText
         mSendButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
+
+
+
                 // TODO: Send messages on click
                 FriendlyMessage friendlyMessage = new FriendlyMessage(mMessageEditText.getText().toString(),mUsername,null);
                 mMessagesDatabaseReference.push().setValue(friendlyMessage);
@@ -139,7 +170,7 @@ public class MainActivity extends AppCompatActivity {
         mAuthStateListener = new FirebaseAuth.AuthStateListener() {
             @Override
             public void onAuthStateChanged(@NonNull FirebaseAuth firebaseAuth) {
-                FirebaseUser user = firebaseAuth.getCurrentUser();
+                 user = firebaseAuth.getCurrentUser();
                 if (user != null) {
                     // User is signed in
                     onSignedInInitialize(user.getDisplayName());
@@ -150,13 +181,15 @@ public class MainActivity extends AppCompatActivity {
                             AuthUI.getInstance()
                                     .createSignInIntentBuilder()
                                     .setAvailableProviders(Arrays.asList(
-                                            new AuthUI.IdpConfig.EmailBuilder().build()))
+                                            new AuthUI.IdpConfig.EmailBuilder().build(),
+                                            new AuthUI.IdpConfig.PhoneBuilder().build()))
                                     .build(),
                             RC_SIGN_IN);
                 }
             }
         };
     }
+
 
     @Override
     public boolean onCreateOptionsMenu(Menu menu) {
@@ -171,7 +204,12 @@ public class MainActivity extends AppCompatActivity {
              case R.id.sign_out_menu:
                 AuthUI.getInstance().signOut(getApplicationContext());
                 return true;
-             default:
+            case R.id.profile_menu:
+                Intent myIntent = new Intent(MainActivity.this, Profile_Activity.class);
+                myIntent.putExtra("key", mUsername); //Optional parameters
+                MainActivity.this.startActivity(myIntent);
+
+                default:
                  return super.onOptionsItemSelected(item);
         }
 
@@ -180,14 +218,45 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, @Nullable Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode==RC_SIGN_IN){
-            Toast.makeText(getApplicationContext(),"Signed In",Toast.LENGTH_LONG).show();
-        }
-        else {
-            Toast.makeText(getApplicationContext(),"Signed out",Toast.LENGTH_LONG).show();
-            finish();
 
-        }
+
+            if (resultCode==RESULT_OK){
+                Toast.makeText(getApplicationContext(),"Signed In",Toast.LENGTH_LONG).show();
+            }
+        else if(resultCode==RESULT_CANCELED) {
+                Toast.makeText(getApplicationContext(), "Signed out", Toast.LENGTH_LONG).show();
+                finish();
+
+            }
+        if (requestCode==RC_PHOTO_PICKER && resultCode == RESULT_OK){
+            Log.e("went","went");
+                Uri selectedImageUri = data.getData();
+                final StorageReference photoref=
+                        mChatPhotosStorageReference.child(selectedImageUri.getLastPathSegment());
+                photoref.putFile(selectedImageUri).addOnSuccessListener(new OnSuccessListener<UploadTask.TaskSnapshot>() {
+                    @Override
+                    public void onSuccess(UploadTask.TaskSnapshot taskSnapshot) {
+
+                        photoref.getDownloadUrl().addOnSuccessListener(new OnSuccessListener<Uri>() {
+                            @Override
+                            public void onSuccess(Uri uri) {
+                                Log.e("url",new Gson().toJson(uri));
+                                FriendlyMessage friendlyMessage = new FriendlyMessage(null,mUsername,uri.toString());
+                                mMessagesDatabaseReference.push().setValue(friendlyMessage);
+                            }
+                        });
+
+//                       Uri downloadUrl = taskSnapshot.getMetadata().getReference().getDownloadUrl().toString();
+//                       Task<Uri> downloadurl =  taskSnapshot.getMetadata().getReference().getDownloadUrl();
+//
+//                       Log.e("url",new Gson().toJson(downloadurl));
+//                       FriendlyMessage friendlyMessage = new FriendlyMessage(null,mUsername,taskSnapshot.getMetadata().getReference().getDownloadUrl().toString());
+//                       mMessagesDatabaseReference.push().setValue(friendlyMessage);
+
+                    }
+                });
+            }
+//        }
     }
 
     @Override
@@ -208,6 +277,9 @@ public class MainActivity extends AppCompatActivity {
     private void onSignedInInitialize(String Username){
         mUsername = Username;
         attachDatabaseListener();
+        addProfileData();
+
+
     }
     private void onSignedOutCleanup(){
         mUsername = ANONYMOUS;
@@ -255,4 +327,41 @@ public class MainActivity extends AppCompatActivity {
             mMessagesDatabaseReference.removeEventListener(mChildEventListener);
 
     }
+
+
+private  void addProfileData(){
+
+    DocumentReference newCityRef = mFirebaseFirestore.collection("users").document(mUsername);
+    Map<String, Object> docData = new HashMap<>();
+    docData.put("first", mUsername);
+    docData.put("isOnline", true);
+    docData.put("born", "19/10/1999");
+
+    newCityRef.set(docData).addOnSuccessListener(new OnSuccessListener<Void>() {
+        @Override
+        public void onSuccess(Void aVoid) {
+            Log.e("successfully written!","Done");
+        }
+    });
+//
+//    mFirebaseFirestore.collection("data").document("one")
+//            .set(docData)
+//            .addOnSuccessListener(new OnSuccessListener<Void>() {
+//                @Override
+//                public void onSuccess(Void aVoid) {
+//                    Log.d(TAG, "DocumentSnapshot successfully written!");
+//                }
+//            })
+//            .addOnFailureListener(new OnFailureListener() {
+//                @Override
+//                public void onFailure(@NonNull Exception e) {
+//                    Log.w(TAG, "Error writing document", e);
+//                }
+//            });
+
 }
+
+}
+
+
+
